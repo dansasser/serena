@@ -15,7 +15,6 @@ import shutil
 import threading
 from pathlib import Path
 from time import sleep
-from typing import Any
 
 from overrides import override
 
@@ -25,57 +24,45 @@ from solidlsp.language_servers.typescript_language_server import (
     TypeScriptLanguageServer,
     prefer_non_node_modules_definition,
 )
-from solidlsp.ls import LSPFileBuffer, SolidLanguageServer
+from solidlsp.ls import SolidLanguageServer
 from solidlsp.ls_config import Language, LanguageServerConfig
 from solidlsp.ls_exceptions import SolidLSPException
-from solidlsp.ls_types import Location
 from solidlsp.ls_utils import PathUtils
-from solidlsp.lsp_protocol_handler import lsp_types
-from solidlsp.lsp_protocol_handler.lsp_types import DocumentSymbol, InitializeParams, SymbolInformation
+from solidlsp.lsp_protocol_handler.lsp_types import InitializeParams
 from solidlsp.lsp_protocol_handler.server import ProcessLaunchInfo
 from solidlsp.settings import SolidLSPSettings
-
 
 log = logging.getLogger(__name__)
 
 
 class AstroTypeScriptServer(TypeScriptLanguageServer):
-    """
-    TypeScript Language Server companion for Astro files.
+    """TypeScript LS companion for Astro files.
 
-    Provides type checking and cross-file reference resolution for TypeScript/JavaScript
-    code within Astro components. Similar to VueTypeScriptServer.
-
-    TODO: Implement following vue_language_server.py pattern:
-    - Override get_language_enum_instance() to return Language.TYPESCRIPT
-    - Override _get_language_id_for_file() for .astro -> "astro" mapping
-    - Override _get_initialize_params() for Astro-specific initialization
-    - Handle workspace/configuration requests
+    Unlike VueTypeScriptServer, this doesn't require @vue/typescript-plugin.
+    Astro's language server handles TypeScript natively, but we still need
+    a companion TypeScript server for cross-file type resolution.
     """
 
-    def __init__(
-        self,
-        config: LanguageServerConfig,
-        repository_root_path: str,
-        solidlsp_settings: SolidLSPSettings,
-        tsdk_path: str,
-    ) -> None:
-        # TODO: Initialize with Astro-specific TypeScript configuration
-        # See VueTypeScriptServer.__init__ for pattern
-        raise NotImplementedError("AstroTypeScriptServer not yet implemented")
+    _pending_ts_ls_executable: list[str] | None = None
 
     @classmethod
+    @override
     def get_language_enum_instance(cls) -> Language:
-        """Return TYPESCRIPT since this is a TypeScript variant server."""
+        """Return TYPESCRIPT since this is a TypeScript language server variant."""
         return Language.TYPESCRIPT
 
-    def _get_language_id_for_file(self, relative_file_path: str) -> str:
-        """
-        Map file extensions to language IDs.
+    @classmethod
+    @override
+    def _setup_runtime_dependencies(cls, config: LanguageServerConfig, solidlsp_settings: SolidLSPSettings) -> list[str]:
+        if cls._pending_ts_ls_executable is not None:
+            return cls._pending_ts_ls_executable
+        return ["typescript-language-server", "--stdio"]
 
-        .astro -> "astro"
-        .ts/.tsx/.mts/.cts -> "typescript"
-        .js/.jsx/.mjs/.cjs -> "javascript"
+    @override
+    def _get_language_id_for_file(self, relative_file_path: str) -> str:
+        """Return the correct language ID for files.
+
+        Astro files must be opened with language ID "astro" for proper processing.
         """
         ext = os.path.splitext(relative_file_path)[1].lower()
         if ext == ".astro":
@@ -87,200 +74,486 @@ class AstroTypeScriptServer(TypeScriptLanguageServer):
         else:
             return "typescript"
 
-    def _get_initialize_params(self, repository_absolute_path: str) -> InitializeParams:
-        """Get initialization parameters for Astro TypeScript server."""
-        # TODO: Implement Astro-specific initialization options
-        raise NotImplementedError()
-
-
-class AstroLanguageServer(SolidLanguageServer):
-    """
-    Language server for Astro components with companion TypeScript LS.
-
-    Architecture:
-    - Main Astro LS: Handles .astro file features (syntax, completions, etc.)
-    - Companion TypeScript LS: Provides type checking and cross-file references
-
-    This follows the same dual-server pattern as VueLanguageServer.
-
-    TODO: Implement following vue_language_server.py pattern:
-    - __init__: Setup runtime dependencies and threading events
-    - _setup_runtime_dependencies: Install @astrojs/language-server + typescript
-    - _start_typescript_server: Create and start AstroTypeScriptServer
-    - _find_all_astro_files: Recursively find .astro files
-    - _ensure_astro_files_indexed_on_ts_server: Index files for cross-file refs
-    - request_references: Combine refs from both servers, deduplicate
-    - request_definition: Delegate to TypeScript server
-    - request_rename_symbol_edit: Delegate to TypeScript server
-    """
-
-    # Version defaults for runtime dependencies
-    DEFAULT_ASTRO_LS_VERSION = "2.15.7"
-    DEFAULT_TYPESCRIPT_VERSION = "5.9.3"
-    DEFAULT_TS_LS_VERSION = "5.1.3"
-
-    # Timeout values
-    TS_SERVER_READY_TIMEOUT = 5.0
-    ASTRO_SERVER_READY_TIMEOUT = 3.0
-    ASTRO_INDEXING_WAIT_TIME = 4.0 if os.name == "nt" else 2.0
-
     def __init__(
         self,
         config: LanguageServerConfig,
         repository_root_path: str,
         solidlsp_settings: SolidLSPSettings,
-    ) -> None:
-        """
-        Initialize Astro language server with dual-server architecture.
-
-        TODO: Implement following vue_language_server.py __init__ pattern:
-        1. Call _setup_runtime_dependencies to get executables
-        2. Create ProcessLaunchInfo for Astro LS
-        3. Initialize threading events for coordination
-        4. Call super().__init__
-        5. Store TS server config for later creation
-        """
-        raise NotImplementedError("AstroLanguageServer not yet implemented")
-
-    @classmethod
-    def get_language_enum_instance(cls) -> Language:
-        """Return ASTRO language enum."""
-        return Language.ASTRO
-
-    @classmethod
-    def _setup_runtime_dependencies(
-        cls,
-        config: LanguageServerConfig,
-        solidlsp_settings: SolidLSPSettings,
-    ) -> tuple[list[str], str, list[str]]:
-        """
-        Install runtime dependencies and return executable paths.
-
-        Returns:
-            Tuple of (astro_ls_cmd, tsdk_path, ts_ls_cmd)
-
-        TODO: Implement following vue_language_server.py pattern:
-        1. Check node/npm availability
-        2. Get versions from config or defaults
-        3. Create RuntimeDependencyCollection with:
-           - @astrojs/language-server
-           - typescript
-           - typescript-language-server
-        4. Check .installed_version for cached installs
-        5. Install if needed
-        6. Return executable paths (handle .cmd for Windows)
-        """
-        raise NotImplementedError()
-
-    def _start_typescript_server(self) -> None:
-        """
-        Create and start the companion TypeScript server.
-
-        TODO: Implement following vue_language_server.py pattern:
-        1. Create AstroTypeScriptServer instance
-        2. Start the server
-        3. Wait for server_ready event with timeout
-        4. Set _ts_server_started flag
-        """
-        raise NotImplementedError()
-
-    def _find_all_astro_files(self) -> list[str]:
-        """
-        Recursively find all .astro files in the repository.
-
-        Returns:
-            List of relative paths to .astro files
-
-        TODO: Implement:
-        1. Walk repository_root_path
-        2. Filter for .astro extension
-        3. Exclude node_modules, dist, .astro directories
-        4. Return relative paths
-        """
-        raise NotImplementedError()
-
-    def _ensure_astro_files_indexed_on_ts_server(self) -> None:
-        """
-        Open all .astro files on TypeScript server for cross-file type checking.
-
-        TODO: Implement following vue_language_server.py pattern:
-        1. If already indexed, return early
-        2. Find all astro files
-        3. Open each on TypeScript server
-        4. Track URIs for later cleanup
-        5. Set _astro_files_indexed flag
-        """
-        raise NotImplementedError()
+        tsdk_path: str,
+        ts_ls_executable_path: list[str],
+    ):
+        self._custom_tsdk_path = tsdk_path
+        AstroTypeScriptServer._pending_ts_ls_executable = ts_ls_executable_path
+        super().__init__(config, repository_root_path, solidlsp_settings)
+        AstroTypeScriptServer._pending_ts_ls_executable = None
 
     @override
-    def request_references(
-        self,
-        relative_file_path: str,
-        line: int,
-        column: int,
-    ) -> list[Location]:
-        """
-        Find all references to symbol at position.
+    def _get_initialize_params(self, repository_absolute_path: str) -> InitializeParams:
+        params = super()._get_initialize_params(repository_absolute_path)
 
-        Combines references from:
-        1. TypeScript server (symbol references)
-        2. Astro server (file references for .astro files)
+        # Unlike Vue, Astro doesn't need a TypeScript plugin
+        # Just configure the tsserver path
+        params["initializationOptions"] = {
+            "tsserver": {
+                "path": self._custom_tsdk_path,
+            },
+        }
 
-        Deduplicates by (uri, line, character) tuple.
+        if "workspace" in params["capabilities"]:
+            params["capabilities"]["workspace"]["executeCommand"] = {"dynamicRegistration": True}
 
-        TODO: Implement following vue_language_server.py pattern
-        """
-        raise NotImplementedError()
+        return params
 
     @override
-    def request_definition(
-        self,
-        relative_file_path: str,
-        line: int,
-        column: int,
-    ) -> list[Location]:
-        """
-        Find definition of symbol at position.
+    def _start_server(self) -> None:
+        def workspace_configuration_handler(params: dict) -> list:
+            items = params.get("items", [])
+            return [{} for _ in items]
 
-        Delegates to TypeScript server for type-aware definition lookup.
+        self.server.on_request("workspace/configuration", workspace_configuration_handler)
+        super()._start_server()
 
-        TODO: Implement following vue_language_server.py pattern
-        """
-        raise NotImplementedError()
 
-    @override
-    def request_rename_symbol_edit(
-        self,
-        relative_file_path: str,
-        line: int,
-        column: int,
-        new_name: str,
-    ) -> lsp_types.WorkspaceEdit | None:
-        """
-        Rename symbol at position across all files.
+class AstroLanguageServer(SolidLanguageServer):
+    """
+    Language server for Astro components using @astrojs/language-server with companion TypeScript LS.
 
-        Delegates to TypeScript server for cross-file rename.
+    You can pass the following entries in ls_specific_settings["astro"]:
+        - astro_language_server_version: Version of @astrojs/language-server to install (default: "2.15.7")
 
-        TODO: Implement following vue_language_server.py pattern
-        """
-        raise NotImplementedError()
+    Note: TypeScript versions are configured via ls_specific_settings["typescript"]:
+        - typescript_version: Version of TypeScript to install (default: "5.9.3")
+        - typescript_language_server_version: Version of typescript-language-server to install (default: "5.1.3")
+    """
+
+    TS_SERVER_READY_TIMEOUT = 5.0
+    ASTRO_SERVER_READY_TIMEOUT = 3.0
+    ASTRO_INDEXING_WAIT_TIME = 4.0 if os.name == "nt" else 2.0
+
+    def __init__(self, config: LanguageServerConfig, repository_root_path: str, solidlsp_settings: SolidLSPSettings):
+        astro_lsp_executable_path, self.tsdk_path, self._ts_ls_cmd = self._setup_runtime_dependencies(config, solidlsp_settings)
+        self._astro_ls_dir = os.path.join(self.ls_resources_dir(solidlsp_settings), "astro-lsp")
+        super().__init__(
+            config,
+            repository_root_path,
+            ProcessLaunchInfo(cmd=astro_lsp_executable_path, cwd=repository_root_path),
+            "astro",
+            solidlsp_settings,
+        )
+        self.server_ready = threading.Event()
+        self._ts_server: AstroTypeScriptServer | None = None
+        self._ts_server_started = False
+        self._astro_files_indexed = False
+        self._indexed_astro_file_uris: list[str] = []
 
     @override
     def is_ignored_dirname(self, dirname: str) -> bool:
-        """Check if directory should be ignored during file scanning."""
         return super().is_ignored_dirname(dirname) or dirname in [
             "node_modules",
             "dist",
             ".astro",
         ]
 
-    def stop(self, shutdown_timeout: float = 5.0) -> None:
-        """
-        Shutdown both Astro and TypeScript servers.
+    @override
+    def _get_language_id_for_file(self, relative_file_path: str) -> str:
+        ext = os.path.splitext(relative_file_path)[1].lower()
+        if ext == ".astro":
+            return "astro"
+        elif ext in (".ts", ".tsx", ".mts", ".cts"):
+            return "typescript"
+        elif ext in (".js", ".jsx", ".mjs", ".cjs"):
+            return "javascript"
+        else:
+            return "astro"
 
-        TODO: Implement:
-        1. Cleanup indexed astro files
-        2. Stop TypeScript server
-        3. Call super().stop()
-        """
-        raise NotImplementedError()
+    def _is_typescript_file(self, file_path: str) -> bool:
+        ext = os.path.splitext(file_path)[1].lower()
+        return ext in (".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs")
+
+    def _find_all_astro_files(self) -> list[str]:
+        astro_files = []
+        repo_path = Path(self.repository_root_path)
+
+        for astro_file in repo_path.rglob("*.astro"):
+            try:
+                relative_path = str(astro_file.relative_to(repo_path))
+                if "node_modules" not in relative_path and not relative_path.startswith("."):
+                    astro_files.append(relative_path)
+            except Exception as e:
+                log.debug(f"Error processing Astro file {astro_file}: {e}")
+
+        return astro_files
+
+    def _ensure_astro_files_indexed_on_ts_server(self) -> None:
+        if self._astro_files_indexed:
+            return
+
+        assert self._ts_server is not None
+        log.info("Indexing .astro files on TypeScript server for cross-file references")
+        astro_files = self._find_all_astro_files()
+        log.debug(f"Found {len(astro_files)} .astro files to index")
+
+        for astro_file in astro_files:
+            try:
+                with self._ts_server.open_file(astro_file) as file_buffer:
+                    file_buffer.ref_count += 1
+                    self._indexed_astro_file_uris.append(file_buffer.uri)
+            except Exception as e:
+                log.debug(f"Failed to open {astro_file} on TS server: {e}")
+
+        self._astro_files_indexed = True
+        log.info("Astro file indexing on TypeScript server complete")
+
+        sleep(self._get_astro_indexing_wait_time())
+        log.debug("Wait period after Astro file indexing complete")
+
+    def _get_astro_indexing_wait_time(self) -> float:
+        return self.ASTRO_INDEXING_WAIT_TIME
+
+    def _send_ts_references_request(self, relative_file_path: str, line: int, column: int) -> list[ls_types.Location]:
+        assert self._ts_server is not None
+        uri = PathUtils.path_to_uri(os.path.join(self.repository_root_path, relative_file_path))
+        request_params = {
+            "textDocument": {"uri": uri},
+            "position": {"line": line, "character": column},
+            "context": {"includeDeclaration": True},
+        }
+
+        with self._ts_server.open_file(relative_file_path):
+            response = self._ts_server.handler.send.references(request_params)  # type: ignore[arg-type]
+
+        result: list[ls_types.Location] = []
+        if response is not None:
+            for item in response:
+                abs_path = PathUtils.uri_to_path(item["uri"])
+                if not Path(abs_path).is_relative_to(self.repository_root_path):
+                    log.debug(f"Found reference outside repository: {abs_path}, skipping")
+                    continue
+
+                rel_path = Path(abs_path).relative_to(self.repository_root_path)
+                if self.is_ignored_path(str(rel_path)):
+                    log.debug(f"Ignoring reference in {rel_path}")
+                    continue
+
+                new_item: dict = {}
+                new_item.update(item)  # type: ignore[arg-type]
+                new_item["absolutePath"] = str(abs_path)
+                new_item["relativePath"] = str(rel_path)
+                result.append(ls_types.Location(**new_item))  # type: ignore
+
+        return result
+
+    @override
+    def request_references(self, relative_file_path: str, line: int, column: int) -> list[ls_types.Location]:
+        if not self.server_started:
+            log.error("request_references called before Language Server started")
+            raise SolidLSPException("Language Server not started")
+
+        if not self._has_waited_for_cross_file_references:
+            sleep(self._get_wait_time_for_cross_file_referencing())
+            self._has_waited_for_cross_file_references = True
+
+        self._ensure_astro_files_indexed_on_ts_server()
+        return self._send_ts_references_request(relative_file_path, line=line, column=column)
+
+    @override
+    def request_definition(self, relative_file_path: str, line: int, column: int) -> list[ls_types.Location]:
+        if not self.server_started:
+            log.error("request_definition called before Language Server started")
+            raise SolidLSPException("Language Server not started")
+
+        assert self._ts_server is not None
+        with self._ts_server.open_file(relative_file_path):
+            return self._ts_server.request_definition(relative_file_path, line, column)
+
+    @override
+    def request_rename_symbol_edit(self, relative_file_path: str, line: int, column: int, new_name: str) -> ls_types.WorkspaceEdit | None:
+        if not self.server_started:
+            log.error("request_rename_symbol_edit called before Language Server started")
+            raise SolidLSPException("Language Server not started")
+
+        assert self._ts_server is not None
+        with self._ts_server.open_file(relative_file_path):
+            return self._ts_server.request_rename_symbol_edit(relative_file_path, line, column, new_name)
+
+    @classmethod
+    def _setup_runtime_dependencies(
+        cls, config: LanguageServerConfig, solidlsp_settings: SolidLSPSettings
+    ) -> tuple[list[str], str, list[str]]:
+        is_node_installed = shutil.which("node") is not None
+        assert is_node_installed, "node is not installed or isn't in PATH. Please install NodeJS and try again."
+        is_npm_installed = shutil.which("npm") is not None
+        assert is_npm_installed, "npm is not installed or isn't in PATH. Please install npm and try again."
+
+        # Get TypeScript version settings from TypeScript language server settings
+        typescript_config = solidlsp_settings.get_ls_specific_settings(Language.TYPESCRIPT)
+        typescript_version = typescript_config.get("typescript_version", "5.9.3")
+        typescript_language_server_version = typescript_config.get("typescript_language_server_version", "5.1.3")
+        astro_config = solidlsp_settings.get_ls_specific_settings(Language.ASTRO)
+        astro_language_server_version = astro_config.get("astro_language_server_version", "2.15.7")
+
+        deps = RuntimeDependencyCollection(
+            [
+                RuntimeDependency(
+                    id="astro-language-server",
+                    description="Astro language server package",
+                    command=["npm", "install", "--prefix", "./", f"@astrojs/language-server@{astro_language_server_version}"],
+                    platform_id="any",
+                ),
+                RuntimeDependency(
+                    id="typescript",
+                    description="TypeScript (required for tsdk)",
+                    command=["npm", "install", "--prefix", "./", f"typescript@{typescript_version}"],
+                    platform_id="any",
+                ),
+                RuntimeDependency(
+                    id="typescript-language-server",
+                    description="TypeScript language server",
+                    command=[
+                        "npm",
+                        "install",
+                        "--prefix",
+                        "./",
+                        f"typescript-language-server@{typescript_language_server_version}",
+                    ],
+                    platform_id="any",
+                ),
+            ]
+        )
+
+        astro_ls_dir = os.path.join(cls.ls_resources_dir(solidlsp_settings), "astro-lsp")
+        astro_executable_path = os.path.join(astro_ls_dir, "node_modules", ".bin", "astro-ls")
+        ts_ls_executable_path = os.path.join(astro_ls_dir, "node_modules", ".bin", "typescript-language-server")
+
+        if os.name == "nt":
+            astro_executable_path += ".cmd"
+            ts_ls_executable_path += ".cmd"
+
+        tsdk_path = os.path.join(astro_ls_dir, "node_modules", "typescript", "lib")
+
+        # Check if installation is needed based on executables AND version
+        version_file = os.path.join(astro_ls_dir, ".installed_version")
+        expected_version = f"{astro_language_server_version}_{typescript_version}_{typescript_language_server_version}"
+
+        needs_install = False
+        if not os.path.exists(astro_executable_path) or not os.path.exists(ts_ls_executable_path):
+            log.info("Astro/TypeScript Language Server executables not found.")
+            needs_install = True
+        elif os.path.exists(version_file):
+            with open(version_file, encoding="utf-8") as f:
+                installed_version = f.read().strip()
+            if installed_version != expected_version:
+                log.info(
+                    f"Astro Language Server version mismatch: installed={installed_version}, expected={expected_version}. Reinstalling..."
+                )
+                needs_install = True
+        else:
+            # No version file exists, assume old installation needs refresh
+            log.info("Astro Language Server version file not found. Reinstalling to ensure correct version...")
+            needs_install = True
+
+        if needs_install:
+            log.info("Installing Astro/TypeScript Language Server dependencies...")
+            deps.install(astro_ls_dir)
+            # Write version marker file
+            with open(version_file, "w", encoding="utf-8") as f:
+                f.write(expected_version)
+            log.info("Astro language server dependencies installed successfully")
+
+        if not os.path.exists(astro_executable_path):
+            raise FileNotFoundError(
+                f"astro-ls executable not found at {astro_executable_path}, something went wrong with the installation."
+            )
+
+        if not os.path.exists(ts_ls_executable_path):
+            raise FileNotFoundError(
+                f"typescript-language-server executable not found at {ts_ls_executable_path}, something went wrong with the installation."
+            )
+
+        return [astro_executable_path, "--stdio"], tsdk_path, [ts_ls_executable_path, "--stdio"]
+
+    def _get_initialize_params(self, repository_absolute_path: str) -> InitializeParams:
+        root_uri = pathlib.Path(repository_absolute_path).as_uri()
+        initialize_params = {
+            "locale": "en",
+            "capabilities": {
+                "textDocument": {
+                    "synchronization": {"didSave": True, "dynamicRegistration": True},
+                    "completion": {"dynamicRegistration": True, "completionItem": {"snippetSupport": True}},
+                    "definition": {"dynamicRegistration": True, "linkSupport": True},
+                    "references": {"dynamicRegistration": True},
+                    "documentSymbol": {
+                        "dynamicRegistration": True,
+                        "hierarchicalDocumentSymbolSupport": True,
+                        "symbolKind": {"valueSet": list(range(1, 27))},
+                    },
+                    "hover": {"dynamicRegistration": True, "contentFormat": ["markdown", "plaintext"]},
+                    "signatureHelp": {"dynamicRegistration": True},
+                    "codeAction": {"dynamicRegistration": True},
+                    "rename": {"dynamicRegistration": True, "prepareSupport": True},
+                },
+                "workspace": {
+                    "workspaceFolders": True,
+                    "didChangeConfiguration": {"dynamicRegistration": True},
+                    "symbol": {"dynamicRegistration": True},
+                },
+            },
+            "processId": os.getpid(),
+            "rootPath": repository_absolute_path,
+            "rootUri": root_uri,
+            "workspaceFolders": [
+                {
+                    "uri": root_uri,
+                    "name": os.path.basename(repository_absolute_path),
+                }
+            ],
+            "initializationOptions": {
+                "typescript": {
+                    "tsdk": self.tsdk_path,
+                },
+            },
+        }
+        return initialize_params  # type: ignore
+
+    def _start_typescript_server(self) -> None:
+        try:
+            ts_config = LanguageServerConfig(
+                code_language=Language.TYPESCRIPT,
+                trace_lsp_communication=False,
+            )
+
+            log.info("Creating companion AstroTypeScriptServer")
+            self._ts_server = AstroTypeScriptServer(
+                config=ts_config,
+                repository_root_path=self.repository_root_path,
+                solidlsp_settings=self._solidlsp_settings,
+                tsdk_path=self.tsdk_path,
+                ts_ls_executable_path=self._ts_ls_cmd,
+            )
+
+            log.info("Starting companion TypeScript server")
+            self._ts_server.start()
+
+            log.info("Waiting for companion TypeScript server to be ready...")
+            if not self._ts_server.server_ready.wait(timeout=self.TS_SERVER_READY_TIMEOUT):
+                log.warning(
+                    f"Timeout waiting for companion TypeScript server to be ready after {self.TS_SERVER_READY_TIMEOUT} seconds, proceeding anyway"
+                )
+                self._ts_server.server_ready.set()
+
+            self._ts_server_started = True
+            log.info("Companion TypeScript server ready")
+        except Exception as e:
+            log.error(f"Error starting TypeScript server: {e}")
+            self._ts_server = None
+            self._ts_server_started = False
+            raise
+
+    def _cleanup_indexed_astro_files(self) -> None:
+        if not self._indexed_astro_file_uris or self._ts_server is None:
+            return
+
+        log.debug(f"Cleaning up {len(self._indexed_astro_file_uris)} indexed Astro files")
+        for uri in self._indexed_astro_file_uris:
+            try:
+                if uri in self._ts_server.open_file_buffers:
+                    file_buffer = self._ts_server.open_file_buffers[uri]
+                    file_buffer.ref_count -= 1
+
+                    if file_buffer.ref_count == 0:
+                        self._ts_server.server.notify.did_close_text_document({"textDocument": {"uri": uri}})
+                        del self._ts_server.open_file_buffers[uri]
+                        log.debug(f"Closed indexed Astro file: {uri}")
+            except Exception as e:
+                log.debug(f"Error closing indexed Astro file {uri}: {e}")
+
+        self._indexed_astro_file_uris.clear()
+
+    def _stop_typescript_server(self) -> None:
+        if self._ts_server is not None:
+            try:
+                log.info("Stopping companion TypeScript server")
+                self._ts_server.stop()
+            except Exception as e:
+                log.warning(f"Error stopping TypeScript server: {e}")
+            finally:
+                self._ts_server = None
+                self._ts_server_started = False
+
+    @override
+    def _start_server(self) -> None:
+        self._start_typescript_server()
+
+        def configuration_handler(params: dict) -> list:
+            items = params.get("items", [])
+            return [{} for _ in items]
+
+        def do_nothing(params: dict) -> None:
+            return
+
+        def window_log_message(msg: dict) -> None:
+            log.info(f"LSP: window/logMessage: {msg}")
+            message_text = msg.get("message", "")
+            if "initialized" in message_text.lower() or "ready" in message_text.lower():
+                log.info("Astro language server ready signal detected")
+                self.server_ready.set()
+                self.completions_available.set()
+
+        self.server.on_request("workspace/configuration", configuration_handler)
+        self.server.on_notification("window/logMessage", window_log_message)
+        self.server.on_notification("$/progress", do_nothing)
+        self.server.on_notification("textDocument/publishDiagnostics", do_nothing)
+
+        log.info("Starting Astro server process")
+        self.server.start()
+        initialize_params = self._get_initialize_params(self.repository_root_path)
+
+        log.info("Sending initialize request from LSP client to LSP server and awaiting response")
+        init_response = self.server.send.initialize(initialize_params)
+        log.debug(f"Received initialize response from Astro server: {init_response}")
+
+        assert init_response["capabilities"]["textDocumentSync"] in [1, 2]
+
+        self.server.notify.initialized({})
+
+        log.info("Waiting for Astro language server to be ready...")
+        if not self.server_ready.wait(timeout=self.ASTRO_SERVER_READY_TIMEOUT):
+            log.info("Timeout waiting for Astro server ready signal, proceeding anyway")
+            self.server_ready.set()
+            self.completions_available.set()
+        else:
+            log.info("Astro server initialization complete")
+
+    def _find_tsconfig_for_file(self, file_path: str) -> str | None:
+        if not file_path:
+            tsconfig_path = os.path.join(self.repository_root_path, "tsconfig.json")
+            return tsconfig_path if os.path.exists(tsconfig_path) else None
+
+        current_dir = os.path.dirname(file_path)
+        repo_root = os.path.abspath(self.repository_root_path)
+
+        while current_dir and current_dir.startswith(repo_root):
+            tsconfig_path = os.path.join(current_dir, "tsconfig.json")
+            if os.path.exists(tsconfig_path):
+                return tsconfig_path
+            parent = os.path.dirname(current_dir)
+            if parent == current_dir:
+                break
+            current_dir = parent
+
+        tsconfig_path = os.path.join(repo_root, "tsconfig.json")
+        return tsconfig_path if os.path.exists(tsconfig_path) else None
+
+    @override
+    def _get_wait_time_for_cross_file_referencing(self) -> float:
+        return 5.0
+
+    @override
+    def stop(self, shutdown_timeout: float = 5.0) -> None:
+        self._cleanup_indexed_astro_files()
+        self._stop_typescript_server()
+        super().stop(shutdown_timeout)
+
+    @override
+    def _get_preferred_definition(self, definitions: list[ls_types.Location]) -> ls_types.Location:
+        return prefer_non_node_modules_definition(definitions)

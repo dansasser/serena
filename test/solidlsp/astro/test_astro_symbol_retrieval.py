@@ -10,8 +10,6 @@ Tests cover:
 Template: test_vue_symbol_retrieval.py
 """
 
-import os
-
 import pytest
 
 from solidlsp import SolidLanguageServer

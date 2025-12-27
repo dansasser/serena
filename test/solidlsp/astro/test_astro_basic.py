@@ -10,13 +10,10 @@ Tests cover:
 Template: test_vue_basic.py
 """
 
-import os
-
 import pytest
 
 from solidlsp import SolidLanguageServer
 from solidlsp.ls_config import Language
-from solidlsp.ls_utils import SymbolUtils
 
 
 @pytest.mark.astro
