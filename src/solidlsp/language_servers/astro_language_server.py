@@ -119,7 +119,7 @@ class AstroLanguageServer(SolidLanguageServer):
     Language server for Astro components using @astrojs/language-server with companion TypeScript LS.
 
     You can pass the following entries in ls_specific_settings["astro"]:
-        - astro_language_server_version: Version of @astrojs/language-server to install (default: "2.15.7")
+        - astro_language_server_version: Version of @astrojs/language-server to install (default: "2.16.2")
 
     Note: TypeScript versions are configured via ls_specific_settings["typescript"]:
         - typescript_version: Version of TypeScript to install (default: "5.9.3")
@@ -290,7 +290,7 @@ class AstroLanguageServer(SolidLanguageServer):
         typescript_version = typescript_config.get("typescript_version", "5.9.3")
         typescript_language_server_version = typescript_config.get("typescript_language_server_version", "5.1.3")
         astro_config = solidlsp_settings.get_ls_specific_settings(Language.ASTRO)
-        astro_language_server_version = astro_config.get("astro_language_server_version", "2.15.7")
+        astro_language_server_version = astro_config.get("astro_language_server_version", "2.16.2")
 
         deps = RuntimeDependencyCollection(
             [
@@ -484,6 +484,10 @@ class AstroLanguageServer(SolidLanguageServer):
     def _start_server(self) -> None:
         self._start_typescript_server()
 
+        def register_capability_handler(params: dict) -> None:
+            # Accept dynamic capability registrations from the server
+            return
+
         def configuration_handler(params: dict) -> list:
             items = params.get("items", [])
             return [{} for _ in items]
@@ -499,6 +503,7 @@ class AstroLanguageServer(SolidLanguageServer):
                 self.server_ready.set()
                 self.completions_available.set()
 
+        self.server.on_request("client/registerCapability", register_capability_handler)
         self.server.on_request("workspace/configuration", configuration_handler)
         self.server.on_notification("window/logMessage", window_log_message)
         self.server.on_notification("$/progress", do_nothing)
