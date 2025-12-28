@@ -79,9 +79,11 @@ class AstroTypeScriptServer(TypeScriptLanguageServer):
         config: LanguageServerConfig,
         repository_root_path: str,
         solidlsp_settings: SolidLSPSettings,
+        astro_plugin_path: str,
         tsdk_path: str,
         ts_ls_executable_path: list[str],
     ):
+        self._astro_plugin_path = astro_plugin_path
         self._custom_tsdk_path = tsdk_path
         AstroTypeScriptServer._pending_ts_ls_executable = ts_ls_executable_path
         super().__init__(config, repository_root_path, solidlsp_settings)
@@ -91,9 +93,15 @@ class AstroTypeScriptServer(TypeScriptLanguageServer):
     def _get_initialize_params(self, repository_absolute_path: str) -> InitializeParams:
         params = super()._get_initialize_params(repository_absolute_path)
 
-        # Unlike Vue, Astro doesn't need a TypeScript plugin
-        # Just configure the tsserver path
+        # Configure Astro TypeScript plugin so tsserver understands .astro files
         params["initializationOptions"] = {
+            "plugins": [
+                {
+                    "name": "@astrojs/ts-plugin",
+                    "location": self._astro_plugin_path,
+                    "languages": ["astro"],
+                }
+            ],
             "tsserver": {
                 "path": self._custom_tsdk_path,
             },
@@ -188,7 +196,8 @@ class AstroLanguageServer(SolidLanguageServer):
         if self._astro_files_indexed:
             return
 
-        assert self._ts_server is not None
+        if self._ts_server is None:
+            raise SolidLSPException("TypeScript server not started - cannot index Astro files")
         log.info("Indexing .astro files on TypeScript server for cross-file references")
         astro_files = self._find_all_astro_files()
         log.debug(f"Found {len(astro_files)} .astro files to index")
@@ -262,7 +271,8 @@ class AstroLanguageServer(SolidLanguageServer):
             log.error("request_definition called before Language Server started")
             raise SolidLSPException("Language Server not started")
 
-        assert self._ts_server is not None
+        if self._ts_server is None:
+            raise SolidLSPException("TypeScript server not started - cannot request definition")
         with self._ts_server.open_file(relative_file_path):
             return self._ts_server.request_definition(relative_file_path, line, column)
 
@@ -281,9 +291,11 @@ class AstroLanguageServer(SolidLanguageServer):
         cls, config: LanguageServerConfig, solidlsp_settings: SolidLSPSettings
     ) -> tuple[list[str], str, list[str]]:
         is_node_installed = shutil.which("node") is not None
-        assert is_node_installed, "node is not installed or isn't in PATH. Please install NodeJS and try again."
+        if not is_node_installed:
+            raise RuntimeError("node is not installed or isn't in PATH. Please install NodeJS and try again.")
         is_npm_installed = shutil.which("npm") is not None
-        assert is_npm_installed, "npm is not installed or isn't in PATH. Please install npm and try again."
+        if not is_npm_installed:
+            raise RuntimeError("npm is not installed or isn't in PATH. Please install npm and try again.")
 
         # Get TypeScript version settings from TypeScript language server settings
         typescript_config = solidlsp_settings.get_ls_specific_settings(Language.TYPESCRIPT)
@@ -291,6 +303,7 @@ class AstroLanguageServer(SolidLanguageServer):
         typescript_language_server_version = typescript_config.get("typescript_language_server_version", "5.1.3")
         astro_config = solidlsp_settings.get_ls_specific_settings(Language.ASTRO)
         astro_language_server_version = astro_config.get("astro_language_server_version", "2.16.2")
+        astro_ts_plugin_version = astro_config.get("astro_ts_plugin_version", "2.1.0")
 
         deps = RuntimeDependencyCollection(
             [
@@ -298,6 +311,12 @@ class AstroLanguageServer(SolidLanguageServer):
                     id="astro-language-server",
                     description="Astro language server package",
                     command=["npm", "install", "--prefix", "./", f"@astrojs/language-server@{astro_language_server_version}"],
+                    platform_id="any",
+                ),
+                RuntimeDependency(
+                    id="astro-ts-plugin",
+                    description="Astro TypeScript plugin for tsserver",
+                    command=["npm", "install", "--prefix", "./", f"@astrojs/ts-plugin@{astro_ts_plugin_version}"],
                     platform_id="any",
                 ),
                 RuntimeDependency(
@@ -333,7 +352,9 @@ class AstroLanguageServer(SolidLanguageServer):
 
         # Check if installation is needed based on executables AND version
         version_file = os.path.join(astro_ls_dir, ".installed_version")
-        expected_version = f"{astro_language_server_version}_{typescript_version}_{typescript_language_server_version}"
+        expected_version = (
+            f"{astro_language_server_version}_{astro_ts_plugin_version}_{typescript_version}_{typescript_language_server_version}"
+        )
 
         needs_install = False
         if not os.path.exists(astro_executable_path) or not os.path.exists(ts_ls_executable_path):
@@ -417,6 +438,9 @@ class AstroLanguageServer(SolidLanguageServer):
 
     def _start_typescript_server(self) -> None:
         try:
+            # Find the Astro TypeScript plugin path
+            astro_ts_plugin_path = os.path.join(self._astro_ls_dir, "node_modules", "@astrojs", "ts-plugin")
+
             ts_config = LanguageServerConfig(
                 code_language=Language.TYPESCRIPT,
                 trace_lsp_communication=False,
@@ -427,6 +451,7 @@ class AstroLanguageServer(SolidLanguageServer):
                 config=ts_config,
                 repository_root_path=self.repository_root_path,
                 solidlsp_settings=self._solidlsp_settings,
+                astro_plugin_path=astro_ts_plugin_path,
                 tsdk_path=self.tsdk_path,
                 ts_ls_executable_path=self._ts_ls_cmd,
             )
@@ -517,7 +542,9 @@ class AstroLanguageServer(SolidLanguageServer):
         init_response = self.server.send.initialize(initialize_params)
         log.debug(f"Received initialize response from Astro server: {init_response}")
 
-        assert init_response["capabilities"]["textDocumentSync"] in [1, 2]
+        text_doc_sync = init_response.get("capabilities", {}).get("textDocumentSync")
+        if text_doc_sync not in [1, 2]:
+            log.warning(f"Unexpected textDocumentSync value: {text_doc_sync}. Expected 1 (Full) or 2 (Incremental).")
 
         self.server.notify.initialized({})
 
