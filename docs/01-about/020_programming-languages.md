@@ -28,6 +28,8 @@ We currently provide direct, out-of-the-box support for the programming language
 Some languages require additional installations or setup steps, as noted.
 
 * **AL**
+* **Astro**  
+  (requires Node.js v18+ and npm; uses @astrojs/language-server with TypeScript companion server)
 * **Bash**
 * **C#**
 * **C/C++**  
