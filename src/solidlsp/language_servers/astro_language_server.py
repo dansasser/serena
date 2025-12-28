@@ -220,7 +220,8 @@ class AstroLanguageServer(SolidLanguageServer):
         return self.ASTRO_INDEXING_WAIT_TIME
 
     def _send_ts_references_request(self, relative_file_path: str, line: int, column: int) -> list[ls_types.Location]:
-        assert self._ts_server is not None
+        if self._ts_server is None:
+            raise SolidLSPException("TypeScript server not initialized - cannot send references request")
         uri = PathUtils.path_to_uri(os.path.join(self.repository_root_path, relative_file_path))
         request_params = {
             "textDocument": {"uri": uri},
