@@ -34,6 +34,9 @@ from solidlsp.settings import SolidLSPSettings
 
 log = logging.getLogger(__name__)
 
+# Thread-local storage for passing executable path to classmethod during __init__
+_astro_ts_thread_local = threading.local()
+
 
 class AstroTypeScriptServer(TypeScriptLanguageServer):
     """TypeScript LS companion for Astro files.
@@ -42,8 +45,6 @@ class AstroTypeScriptServer(TypeScriptLanguageServer):
     Astro's language server handles TypeScript natively, but we still need
     a companion TypeScript server for cross-file type resolution.
     """
-
-    _pending_ts_ls_executable: list[str] | None = None
 
     @classmethod
     @override
@@ -54,8 +55,10 @@ class AstroTypeScriptServer(TypeScriptLanguageServer):
     @classmethod
     @override
     def _setup_runtime_dependencies(cls, config: LanguageServerConfig, solidlsp_settings: SolidLSPSettings) -> list[str]:
-        if cls._pending_ts_ls_executable is not None:
-            return cls._pending_ts_ls_executable
+        # Use thread-local storage for thread-safe passing of executable path from __init__
+        executable = getattr(_astro_ts_thread_local, "executable", None)
+        if executable is not None:
+            return executable
         return ["typescript-language-server", "--stdio"]
 
     @override
@@ -85,9 +88,12 @@ class AstroTypeScriptServer(TypeScriptLanguageServer):
     ):
         self._astro_plugin_path = astro_plugin_path
         self._custom_tsdk_path = tsdk_path
-        AstroTypeScriptServer._pending_ts_ls_executable = ts_ls_executable_path
-        super().__init__(config, repository_root_path, solidlsp_settings)
-        AstroTypeScriptServer._pending_ts_ls_executable = None
+        # Use thread-local for thread-safe passing to classmethod
+        _astro_ts_thread_local.executable = ts_ls_executable_path
+        try:
+            super().__init__(config, repository_root_path, solidlsp_settings)
+        finally:
+            _astro_ts_thread_local.executable = None
 
     @override
     def _get_initialize_params(self, repository_absolute_path: str) -> InitializeParams:
@@ -283,7 +289,8 @@ class AstroLanguageServer(SolidLanguageServer):
             log.error("request_rename_symbol_edit called before Language Server started")
             raise SolidLSPException("Language Server not started")
 
-        assert self._ts_server is not None
+        if self._ts_server is None:
+            raise SolidLSPException("TypeScript server not started - cannot request rename")
         with self._ts_server.open_file(relative_file_path):
             return self._ts_server.request_rename_symbol_edit(relative_file_path, line, column, new_name)
 
