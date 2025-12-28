@@ -37,6 +37,11 @@ class TestAstroLanguageServer:
         layout_path = str(repo_path / "src" / "layouts" / "Layout.astro")
         symbols = language_server.request_document_symbols(layout_path)
         assert symbols is not None, "Expected document symbols but got None"
+        # Layout.astro defines: interface Props { title: string; }
+        all_symbols = symbols.get_all_symbols_and_roots()
+        symbol_names = [s.name for s in all_symbols]
+        # Verify we found the Props interface from frontmatter
+        assert "Props" in symbol_names, f"Expected 'Props' interface in symbols, got: {symbol_names}"
 
     @pytest.mark.parametrize("language_server", [Language.ASTRO], indirect=True)
     @pytest.mark.parametrize("repo_path", [Language.ASTRO], indirect=True)
@@ -47,8 +52,8 @@ class TestAstroLanguageServer:
         assert symbols is not None, "Expected document symbols but got None"
         all_symbols = symbols.get_all_symbols_and_roots()
         symbol_names = [s.name for s in all_symbols]
-        assert "CounterStore" in symbol_names
-        assert "createCounter" in symbol_names
+        assert "CounterStore" in symbol_names, f"Expected 'CounterStore' in symbols, got: {symbol_names}"
+        assert "createCounter" in symbol_names, f"Expected 'createCounter' in symbols, got: {symbol_names}"
 
 
 @pytest.mark.astro
@@ -61,11 +66,11 @@ class TestAstroDefinition:
         """Test finding definition within TypeScript file."""
         counter_path = str(repo_path / "src" / "stores" / "counter.ts")
         definition_list = language_server.request_definition(counter_path, 6, 35)
-        assert definition_list
+        assert definition_list, "Expected at least one definition"
         assert len(definition_list) >= 1
         definition = definition_list[0]
-        assert definition["uri"].endswith("counter.ts")
-        assert definition["range"]["start"]["line"] == 0
+        assert definition["uri"].endswith("counter.ts"), f"Expected counter.ts, got: {definition['uri']}"
+        assert definition["range"]["start"]["line"] == 0, "Expected definition at line 0"
 
 
 @pytest.mark.astro
@@ -77,9 +82,13 @@ class TestAstroReferences:
     def test_find_references_within_typescript(self, language_server: SolidLanguageServer, repo_path: Path) -> None:
         """Test finding references within TypeScript file."""
         counter_path = str(repo_path / "src" / "stores" / "counter.ts")
+        # CounterStore interface on line 0 (0-indexed), column 20
         references = language_server.request_references(counter_path, 0, 20)
-        assert references
+        assert references, "Expected at least one reference"
         assert len(references) >= 1
+        # Verify at least one reference points to counter.ts
+        ref_files = [ref["uri"] for ref in references]
+        assert any("counter.ts" in uri for uri in ref_files), f"Expected reference in counter.ts, got: {ref_files}"
 
 
 @pytest.mark.astro
@@ -91,7 +100,7 @@ class TestAstroDualLspArchitecture:
     def test_typescript_server_starts(self, language_server: SolidLanguageServer, repo_path: Path) -> None:
         """Test that companion TypeScript server starts successfully."""
         astro_ls = language_server.language_server
-        assert hasattr(astro_ls, "_ts_server")
+        assert hasattr(astro_ls, "_ts_server"), "Expected _ts_server attribute on Astro language server"
 
     @pytest.mark.parametrize("language_server", [Language.ASTRO], indirect=True)
     @pytest.mark.parametrize("repo_path", [Language.ASTRO], indirect=True)
@@ -99,7 +108,7 @@ class TestAstroDualLspArchitecture:
         """Test that definitions work with both Astro and TypeScript servers."""
         counter_path = str(repo_path / "src" / "stores" / "counter.ts")
         ts_definition = language_server.request_definition(counter_path, 6, 35)
-        assert ts_definition
+        assert ts_definition, "Expected definition from TypeScript server"
 
 
 @pytest.mark.astro
@@ -111,8 +120,10 @@ class TestAstroEdgeCases:
     def test_astro_file_with_frontmatter(self, language_server: SolidLanguageServer, repo_path: Path) -> None:
         """Test handling of .astro files with frontmatter section."""
         index_path = str(repo_path / "src" / "pages" / "index.astro")
-        # Should handle frontmatter without errors - just verify no exception raised
-        _symbols = language_server.request_document_symbols(index_path)
+        # index.astro has imports and variable declarations in frontmatter
+        symbols = language_server.request_document_symbols(index_path)
+        # Should handle frontmatter without errors
+        assert symbols is not None, "Expected document symbols but got None"
 
     @pytest.mark.parametrize("language_server", [Language.ASTRO], indirect=True)
     @pytest.mark.parametrize("repo_path", [Language.ASTRO], indirect=True)
@@ -120,4 +131,9 @@ class TestAstroEdgeCases:
         """Test Layout.astro which has Props interface in frontmatter."""
         layout_path = str(repo_path / "src" / "layouts" / "Layout.astro")
         # Layout.astro defines: interface Props { title: string; }
-        _symbols = language_server.request_document_symbols(layout_path)
+        symbols = language_server.request_document_symbols(layout_path)
+        assert symbols is not None, "Expected document symbols but got None"
+        all_symbols = symbols.get_all_symbols_and_roots()
+        symbol_names = [s.name for s in all_symbols]
+        # Verify Props interface is found
+        assert "Props" in symbol_names, f"Expected 'Props' interface in Layout.astro, got: {symbol_names}"

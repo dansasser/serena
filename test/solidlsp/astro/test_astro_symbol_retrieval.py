@@ -29,7 +29,12 @@ class TestAstroSymbolRetrieval:
         counter_path = str(repo_path / "src" / "stores" / "counter.ts")
         # Request document symbols to verify we can get symbols from TS files
         symbols = language_server.request_document_symbols(counter_path)
-        assert symbols is not None
+        assert symbols is not None, "Expected document symbols but got None"
+        all_symbols = symbols.get_all_symbols_and_roots()
+        symbol_names = [s.name for s in all_symbols]
+        # Verify expected symbols from counter.ts
+        assert "CounterStore" in symbol_names, f"Expected 'CounterStore' in symbols, got: {symbol_names}"
+        assert "createCounter" in symbol_names, f"Expected 'createCounter' in symbols, got: {symbol_names}"
 
     @pytest.mark.parametrize("language_server", [Language.ASTRO], indirect=True)
     @pytest.mark.parametrize("repo_path", [Language.ASTRO], indirect=True)
@@ -40,7 +45,11 @@ class TestAstroSymbolRetrieval:
         # createCounter is on line 7 (0-indexed: 6), function name starts around char 16
         references = language_server.request_references(counter_path, 6, 20)
         # Should find at least the definition
-        assert references is not None
+        assert references is not None, "Expected references but got None"
+        assert len(references) >= 1, f"Expected at least 1 reference, got {len(references)}"
+        # Verify at least one reference is in counter.ts (the definition itself)
+        ref_files = [ref["uri"] for ref in references]
+        assert any("counter.ts" in uri for uri in ref_files), f"Expected reference in counter.ts, got: {ref_files}"
 
     @pytest.mark.parametrize("language_server", [Language.ASTRO], indirect=True)
     @pytest.mark.parametrize("repo_path", [Language.ASTRO], indirect=True)
@@ -49,10 +58,12 @@ class TestAstroSymbolRetrieval:
         counter_path = str(repo_path / "src" / "stores" / "counter.ts")
         # In createCounter function, CounterStore return type is on line 7 (0-indexed: 6)
         definition_list = language_server.request_definition(counter_path, 6, 35)
-        assert definition_list
+        assert definition_list, "Expected at least one definition"
         # Should point to CounterStore interface definition
         definition = definition_list[0]
-        assert definition["uri"].endswith("counter.ts")
+        assert definition["uri"].endswith("counter.ts"), f"Expected counter.ts, got: {definition['uri']}"
+        # CounterStore is defined at line 0
+        assert definition["range"]["start"]["line"] == 0, f"Expected line 0, got: {definition['range']['start']['line']}"
 
     @pytest.mark.parametrize("language_server", [Language.ASTRO], indirect=True)
     @pytest.mark.parametrize("repo_path", [Language.ASTRO], indirect=True)
@@ -60,8 +71,8 @@ class TestAstroSymbolRetrieval:
         """Test that format.ts utility file symbols are accessible."""
         format_path = str(repo_path / "src" / "utils" / "format.ts")
         symbols = language_server.request_document_symbols(format_path)
-        assert symbols is not None
+        assert symbols is not None, "Expected document symbols but got None"
         all_symbols = symbols.get_all_symbols_and_roots()
         symbol_names = [s.name for s in all_symbols]
-        assert "formatNumber" in symbol_names
-        assert "formatDate" in symbol_names
+        assert "formatNumber" in symbol_names, f"Expected 'formatNumber' in symbols, got: {symbol_names}"
+        assert "formatDate" in symbol_names, f"Expected 'formatDate' in symbols, got: {symbol_names}"
