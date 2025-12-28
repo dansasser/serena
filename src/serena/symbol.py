@@ -513,16 +513,27 @@ class LanguageServerSymbolRetriever:
         """
         Finds all symbols that match the given name path pattern (see class :class:`NamePathMatcher` for details),
         optionally limited to a specific file and filtered by kind.
+
+        When multiple language servers are configured (e.g., astro + typescript), the same file may be
+        processed by multiple servers, potentially returning duplicate symbols. This method deduplicates
+        results based on the symbol's location (file path, line range) and name.
         """
         symbols: list[LanguageServerSymbol] = []
+        # Track seen symbols by their unique location signature to avoid duplicates
+        # when multiple language servers process the same file
+        seen_locations: set[tuple[str | None, int, int, str]] = set()
         for lang_server in self._ls_manager.iter_language_servers():
             symbol_roots = lang_server.request_full_symbol_tree(within_relative_path=within_relative_path)
             for root in symbol_roots:
-                symbols.extend(
-                    LanguageServerSymbol(root).find(
-                        name_path_pattern, include_kinds=include_kinds, exclude_kinds=exclude_kinds, substring_matching=substring_matching
-                    )
-                )
+                for symbol in LanguageServerSymbol(root).find(
+                    name_path_pattern, include_kinds=include_kinds, exclude_kinds=exclude_kinds, substring_matching=substring_matching
+                ):
+                    # Create a unique key based on location and name to detect duplicates
+                    loc = symbol.location
+                    location_key = (loc.relative_path, loc.start_line, loc.end_line, symbol.name)
+                    if location_key not in seen_locations:
+                        seen_locations.add(location_key)
+                        symbols.append(symbol)
         return symbols
 
     def find_unique(
